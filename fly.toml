@@ -1,10 +1,10 @@
-# fly.toml app configuration file generated for kiro-unlimit-thaild on 2026-06-11T12:04:22Z
+# fly.toml app configuration file generated for kiro-go on 2026-06-11T20:27:12Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'kiro-unlimit-thaild'
-primary_region = 'sin'
+app = 'kiro-go'
+primary_region = 'ams'
 
 [build]
 
