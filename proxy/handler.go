@@ -23,15 +23,16 @@ const tokenRefreshSkewSeconds int64 = 120
 type Handler struct {
 	pool *pool.AccountPool
 	// 运行时统计 (使用原子操作)
-	totalRequests   int64
-	successRequests int64
-	failedRequests  int64
-	totalTokens     int64
-	totalCredits    float64 // float64 需要用锁保护
-	creditsMu       sync.RWMutex
-	startTime       int64
-	stopRefresh     chan struct{}
-	stopStatsSaver  chan struct{}
+	totalRequests    int64
+	successRequests  int64
+	failedRequests   int64
+	totalTokens      int64
+	totalCredits     float64 // float64 需要用锁保护
+	creditsMu        sync.RWMutex
+	startTime        int64
+	stopRefresh      chan struct{}
+	stopStatsSaver   chan struct{}
+	stopApiKeyExpiry chan struct{}
 	// 模型缓存
 	cachedModels    []ModelInfo
 	modelsCacheMu   sync.RWMutex
@@ -215,21 +216,24 @@ func NewHandler() *Handler {
 
 	totalReq, successReq, failedReq, totalTokens, totalCredits := config.GetStats()
 	h := &Handler{
-		pool:            pool.GetPool(),
-		totalRequests:   int64(totalReq),
-		successRequests: int64(successReq),
-		failedRequests:  int64(failedReq),
-		totalTokens:     int64(totalTokens),
-		totalCredits:    totalCredits,
-		startTime:       time.Now().Unix(),
-		stopRefresh:     make(chan struct{}),
-		stopStatsSaver:  make(chan struct{}),
-		promptCache:     newPromptCacheTracker(defaultPromptCacheTTL),
+		pool:             pool.GetPool(),
+		totalRequests:    int64(totalReq),
+		successRequests:  int64(successReq),
+		failedRequests:   int64(failedReq),
+		totalTokens:      int64(totalTokens),
+		totalCredits:     totalCredits,
+		startTime:        time.Now().Unix(),
+		stopRefresh:      make(chan struct{}),
+		stopStatsSaver:   make(chan struct{}),
+		stopApiKeyExpiry: make(chan struct{}),
+		promptCache:      newPromptCacheTracker(defaultPromptCacheTTL),
 	}
 	// 启动后台刷新
 	go h.backgroundRefresh()
 	// 启动后台统计保存 (每30秒保存一次)
 	go h.backgroundStatsSaver()
+	// 启动 API key 生命周期到期检查 (每30秒)
+	go h.backgroundApiKeyExpiry()
 	// 清理过期的 stored responses（>30 天）
 	go purgeExpiredResponses(responsesDefaultTTL)
 	return h
@@ -1291,6 +1295,25 @@ func (h *Handler) backgroundStatsSaver() {
 	}
 }
 
+// backgroundApiKeyExpiry 后台定时检查 API key 生命周期是否到期，到期则自动禁用。
+// 每 30 秒扫描一次。鉴权层已按秒级同步拒绝过期 key，此循环负责把持久化的
+// Enabled 标志翻转过来，使 admin UI 反映真实状态且重启后依然生效。
+func (h *Handler) backgroundApiKeyExpiry() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if ids := config.DisableExpiredApiKeys(); len(ids) > 0 {
+				logger.Infof("[ApiKeyExpiry] auto-disabled %d expired API key(s): %v", len(ids), ids)
+			}
+		case <-h.stopApiKeyExpiry:
+			return
+		}
+	}
+}
+
 // saveStats 保存统计到配置文件
 func (h *Handler) saveStats() {
 	config.UpdateStats(
@@ -2155,6 +2178,12 @@ func (h *Handler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/api-keys/") && strings.HasSuffix(path, "/reset-usage") && r.Method == "POST":
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/api-keys/"), "/reset-usage")
 		h.apiResetApiKeyUsage(w, r, id)
+	case strings.HasPrefix(path, "/api-keys/") && strings.HasSuffix(path, "/restart") && r.Method == "POST":
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/api-keys/"), "/restart")
+		h.apiRestartApiKeyLifetime(w, r, id)
+	case strings.HasPrefix(path, "/api-keys/") && strings.HasSuffix(path, "/extend") && r.Method == "POST":
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/api-keys/"), "/extend")
+		h.apiExtendApiKeyLifetime(w, r, id)
 	case strings.HasPrefix(path, "/api-keys/") && r.Method == "GET":
 		h.apiGetApiKey(w, r, strings.TrimPrefix(path, "/api-keys/"))
 	case strings.HasPrefix(path, "/api-keys/") && r.Method == "PUT":

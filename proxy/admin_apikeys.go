@@ -9,34 +9,38 @@ import (
 // apiKeyView is the response payload for listing/inspecting API keys. The Key field
 // is masked so admins can identify entries without exposing the secret.
 type apiKeyView struct {
-	ID            string  `json:"id"`
-	Name          string  `json:"name,omitempty"`
-	KeyMasked     string  `json:"keyMasked"`
-	Enabled       bool    `json:"enabled"`
-	Migrated      bool    `json:"migrated,omitempty"`
-	CreatedAt     int64   `json:"createdAt"`
-	LastUsedAt    int64   `json:"lastUsedAt,omitempty"`
-	TokenLimit    int64   `json:"tokenLimit,omitempty"`
-	CreditLimit   float64 `json:"creditLimit,omitempty"`
-	TokensUsed    int64   `json:"tokensUsed"`
-	CreditsUsed   float64 `json:"creditsUsed"`
-	RequestsCount int64   `json:"requestsCount"`
+	ID              string  `json:"id"`
+	Name            string  `json:"name,omitempty"`
+	KeyMasked       string  `json:"keyMasked"`
+	Enabled         bool    `json:"enabled"`
+	Migrated        bool    `json:"migrated,omitempty"`
+	CreatedAt       int64   `json:"createdAt"`
+	LastUsedAt      int64   `json:"lastUsedAt,omitempty"`
+	LifetimeSeconds int64   `json:"lifetimeSeconds,omitempty"`
+	ExpiresAt       int64   `json:"expiresAt,omitempty"`
+	TokenLimit      int64   `json:"tokenLimit,omitempty"`
+	CreditLimit     float64 `json:"creditLimit,omitempty"`
+	TokensUsed      int64   `json:"tokensUsed"`
+	CreditsUsed     float64 `json:"creditsUsed"`
+	RequestsCount   int64   `json:"requestsCount"`
 }
 
 func toApiKeyView(e config.ApiKeyEntry) apiKeyView {
 	return apiKeyView{
-		ID:            e.ID,
-		Name:          e.Name,
-		KeyMasked:     config.MaskApiKey(e.Key),
-		Enabled:       e.Enabled,
-		Migrated:      e.Migrated,
-		CreatedAt:     e.CreatedAt,
-		LastUsedAt:    e.LastUsedAt,
-		TokenLimit:    e.TokenLimit,
-		CreditLimit:   e.CreditLimit,
-		TokensUsed:    e.TokensUsed,
-		CreditsUsed:   e.CreditsUsed,
-		RequestsCount: e.RequestsCount,
+		ID:              e.ID,
+		Name:            e.Name,
+		KeyMasked:       config.MaskApiKey(e.Key),
+		Enabled:         e.Enabled,
+		Migrated:        e.Migrated,
+		CreatedAt:       e.CreatedAt,
+		LastUsedAt:      e.LastUsedAt,
+		LifetimeSeconds: e.LifetimeSeconds,
+		ExpiresAt:       e.ExpiresAt,
+		TokenLimit:      e.TokenLimit,
+		CreditLimit:     e.CreditLimit,
+		TokensUsed:      e.TokensUsed,
+		CreditsUsed:     e.CreditsUsed,
+		RequestsCount:   e.RequestsCount,
 	}
 }
 
@@ -60,11 +64,12 @@ func (h *Handler) apiGetApiKey(w http.ResponseWriter, r *http.Request, id string
 }
 
 type apiKeyCreateRequest struct {
-	Name        string  `json:"name,omitempty"`
-	Key         string  `json:"key,omitempty"`
-	Enabled     *bool   `json:"enabled,omitempty"`
-	TokenLimit  int64   `json:"tokenLimit,omitempty"`
-	CreditLimit float64 `json:"creditLimit,omitempty"`
+	Name            string  `json:"name,omitempty"`
+	Key             string  `json:"key,omitempty"`
+	Enabled         *bool   `json:"enabled,omitempty"`
+	LifetimeSeconds int64   `json:"lifetimeSeconds,omitempty"`
+	TokenLimit      int64   `json:"tokenLimit,omitempty"`
+	CreditLimit     float64 `json:"creditLimit,omitempty"`
 }
 
 func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
@@ -85,12 +90,18 @@ func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 		keyValue = config.GenerateApiKeyValue()
 	}
 
+	lifetime := req.LifetimeSeconds
+	if lifetime < 0 {
+		lifetime = 0
+	}
+
 	entry, err := config.AddApiKey(config.ApiKeyEntry{
-		Name:        req.Name,
-		Key:         keyValue,
-		Enabled:     enabled,
-		TokenLimit:  req.TokenLimit,
-		CreditLimit: req.CreditLimit,
+		Name:            req.Name,
+		Key:             keyValue,
+		Enabled:         enabled,
+		LifetimeSeconds: lifetime,
+		TokenLimit:      req.TokenLimit,
+		CreditLimit:     req.CreditLimit,
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -108,11 +119,12 @@ func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 }
 
 type apiKeyUpdateRequest struct {
-	Name        *string  `json:"name,omitempty"`
-	Key         *string  `json:"key,omitempty"`
-	Enabled     *bool    `json:"enabled,omitempty"`
-	TokenLimit  *int64   `json:"tokenLimit,omitempty"`
-	CreditLimit *float64 `json:"creditLimit,omitempty"`
+	Name            *string  `json:"name,omitempty"`
+	Key             *string  `json:"key,omitempty"`
+	Enabled         *bool    `json:"enabled,omitempty"`
+	TokenLimit      *int64   `json:"tokenLimit,omitempty"`
+	CreditLimit     *float64 `json:"creditLimit,omitempty"`
+	LifetimeSeconds *int64   `json:"lifetimeSeconds,omitempty"`
 }
 
 func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id string) {
@@ -146,6 +158,9 @@ func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id str
 	if req.CreditLimit != nil {
 		patch.CreditLimit = *req.CreditLimit
 	}
+	if req.LifetimeSeconds != nil {
+		patch.LifetimeSeconds = *req.LifetimeSeconds
+	}
 
 	if err := config.UpdateApiKey(id, patch); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -172,6 +187,58 @@ func (h *Handler) apiDeleteApiKey(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+// apiRestartApiKeyLifetime re-enables the key and arms a fresh full TTL from now.
+func (h *Handler) apiRestartApiKeyLifetime(w http.ResponseWriter, r *http.Request, id string) {
+	if err := config.RestartApiKeyLifetime(id); err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	updated := config.GetApiKeyEntry(id)
+	if updated == nil {
+		json.NewEncoder(w).Encode(map[string]bool{"success": true})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"apiKey":  toApiKeyView(*updated),
+	})
+}
+
+type apiKeyExtendRequest struct {
+	Seconds int64 `json:"seconds,omitempty"` // Preferred: extension in seconds (enables minute-level granularity)
+	Days    int64 `json:"days,omitempty"`    // Legacy: extension in whole days
+}
+
+// apiExtendApiKeyLifetime pushes the running deadline out. The client may send
+// either "seconds" (preferred, minute-level granularity) or the legacy "days".
+func (h *Handler) apiExtendApiKeyLifetime(w http.ResponseWriter, r *http.Request, id string) {
+	var req apiKeyExtendRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Invalid JSON"})
+		return
+	}
+	seconds := req.Seconds
+	if seconds == 0 {
+		seconds = req.Days * 86400
+	}
+	if err := config.ExtendApiKeyLifetimeSeconds(id, seconds); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	updated := config.GetApiKeyEntry(id)
+	if updated == nil {
+		json.NewEncoder(w).Encode(map[string]bool{"success": true})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"apiKey":  toApiKeyView(*updated),
+	})
 }
 
 func (h *Handler) apiResetApiKeyUsage(w http.ResponseWriter, r *http.Request, id string) {

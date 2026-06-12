@@ -1644,6 +1644,41 @@
     return '<div class="text-xs muted-text">' + escapeHtml(label) + ': ' + escapeHtml(fmt(used)) + ' / ' + escapeHtml(fmt(limit)) + '</div>' + usageBar(used, limit);
   }
 
+  // formatRemaining renders the time left until a Unix-seconds deadline as
+  // "Xd Yh Zm" (or "Ym Zs" / "Zs" when under an hour, so the countdown visibly
+  // ticks during short test lifetimes). Returns '' when expiresAt is 0 (clock
+  // stopped) and the expired label when the deadline has passed.
+  function formatRemaining(expiresAt) {
+    if (!expiresAt || expiresAt <= 0) return '';
+    let secs = expiresAt - Math.floor(Date.now() / 1000);
+    if (secs <= 0) return t('apiKeys.lifetimeExpired');
+    const d = Math.floor(secs / 86400); secs -= d * 86400;
+    const h = Math.floor(secs / 3600); secs -= h * 3600;
+    const m = Math.floor(secs / 60); secs -= m * 60;
+    const parts = [];
+    if (d > 0) parts.push(d + 'd');
+    if (h > 0 || d > 0) parts.push(h + 'h');
+    if (m > 0 || h > 0 || d > 0) parts.push(m + 'm');
+    // Show seconds whenever we're under an hour, so short lifetimes count down
+    // visibly instead of sitting on a static "2m".
+    if (d === 0 && h === 0) parts.push(secs + 's');
+    return parts.join(' ');
+  }
+
+  // lifetimeLine builds the countdown row for a key. The span carries
+  // data-apikey-expires so the 1s ticker can refresh it in place without a
+  // full re-render. Keys with no lifetime configured show "permanent".
+  function lifetimeLineHtml(item) {
+    const id = escapeAttr(item.id || '');
+    if (!item.lifetimeSeconds || item.lifetimeSeconds <= 0) {
+      return '<div class="text-xs muted-text">' + escapeHtml(t('apiKeys.lifetimeLabel')) + ': ' + escapeHtml(t('apiKeys.lifetimePermanent')) + '</div>';
+    }
+    const remaining = item.enabled ? formatRemaining(item.expiresAt) : t('apiKeys.lifetimeStopped');
+    return '<div class="text-xs muted-text">' + escapeHtml(t('apiKeys.lifetimeLabel')) + ': ' +
+      '<span data-apikey-expires="' + (item.enabled ? (item.expiresAt || 0) : 0) + '" data-apikey-id="' + id + '">' + escapeHtml(remaining) + '</span>' +
+      '</div>';
+  }
+
   function renderApiKeys() {
     const list = $('apiKeysList');
     if (!list) return;
@@ -1664,6 +1699,11 @@
       const tokensLine = usageLine(t('apiKeys.tokens'), item.tokensUsed || 0, item.tokenLimit || 0);
       const creditsLine = usageLine(t('apiKeys.credits'), item.creditsUsed || 0, item.creditLimit || 0);
       const requestsLine = '<div class="text-xs muted-text">' + escapeHtml(t('apiKeys.requests')) + ': ' + escapeHtml(formatNumber(item.requestsCount || 0)) + '</div>';
+      const lifetimeLine = lifetimeLineHtml(item);
+      const lifetimeButtons = (item.lifetimeSeconds || item.expiresAt || !item.enabled)
+        ? '<button class="btn btn-outline btn-sm" type="button" data-apikey-action="restart" data-id="' + id + '">' + escapeHtml(t('apiKeys.actionRestart')) + '</button>' +
+          '<button class="btn btn-outline btn-sm" type="button" data-apikey-action="extend" data-id="' + id + '">' + escapeHtml(t('apiKeys.actionExtend')) + '</button>'
+        : '';
       return '<div class="card" data-apikey-id="' + id + '" style="margin-top:0.5rem;padding:0.75rem;">' +
         '<div class="flex items-center gap-2" style="flex-wrap:wrap;justify-content:space-between;">' +
           '<div class="flex items-center gap-2" style="flex-wrap:wrap;">' +
@@ -1672,12 +1712,13 @@
             disabled +
             '<span class="text-xs muted-text font-mono">' + masked + '</span>' +
           '</div>' +
-          '<div class="flex items-center gap-2">' +
+          '<div class="flex items-center gap-2" style="flex-wrap:wrap;">' +
             '<label class="switch" title="' + escapeAttr(item.enabled ? t('accounts.disable') : t('accounts.enable')) + '">' +
               '<input type="checkbox" data-apikey-action="toggle" data-id="' + id + '"' + (item.enabled ? ' checked' : '') + ' />' +
               '<span class="slider"></span>' +
             '</label>' +
             '<button class="btn btn-outline btn-sm" type="button" data-apikey-action="edit" data-id="' + id + '">' + escapeHtml(t('apiKeys.actionEdit')) + '</button>' +
+            lifetimeButtons +
             '<button class="btn btn-outline btn-sm" type="button" data-apikey-action="reset" data-id="' + id + '">' + escapeHtml(t('apiKeys.actionReset')) + '</button>' +
             '<button class="btn btn-danger btn-sm" type="button" data-apikey-action="delete" data-id="' + id + '">' + escapeHtml(t('apiKeys.actionDelete')) + '</button>' +
           '</div>' +
@@ -1686,10 +1727,87 @@
           tokensLine +
           creditsLine +
           requestsLine +
+          lifetimeLine +
         '</div>' +
       '</div>';
     }).join('');
     list.innerHTML = html;
+  }
+
+  // Lifetime input helpers. The modal stores a duration as a number + a unit
+  // segmented toggle (minutes/hours/days), but the backend speaks seconds. The
+  // selected unit lives in data-unit on the active .segmented-item; the chips,
+  // number field, and live summary all stay in sync via refreshLifetimeUI.
+
+  // lifetimeUnitSeconds reads the multiplier of the currently-active unit button.
+  function lifetimeUnitSeconds() {
+    const active = document.querySelector('#apiKeyForm_lifetimeUnit .segmented-item.is-active');
+    return active ? (parseInt(active.dataset.unit, 10) || 60) : 86400;
+  }
+
+  // setLifetimeUnit activates the unit button matching the given multiplier.
+  function setLifetimeUnit(unitSeconds) {
+    const items = qsa('#apiKeyForm_lifetimeUnit .segmented-item');
+    let matched = false;
+    items.forEach(it => {
+      const on = parseInt(it.dataset.unit, 10) === unitSeconds;
+      it.classList.toggle('is-active', on);
+      if (on) matched = true;
+    });
+    // Fall back to the last item (days) when nothing matched.
+    if (!matched && items.length) {
+      items.forEach(it => it.classList.remove('is-active'));
+      items[items.length - 1].classList.add('is-active');
+    }
+  }
+
+  // setLifetimeInputs seeds the control from a raw second count, choosing the
+  // largest unit that divides evenly so editing shows clean numbers
+  // (e.g. 7200s -> "2 Hours", not "120 Minutes").
+  function setLifetimeInputs(seconds) {
+    const valEl = $('apiKeyForm_lifetimeValue');
+    if (!valEl) return;
+    seconds = parseInt(seconds, 10) || 0;
+    if (seconds <= 0) {
+      valEl.value = '0';
+      setLifetimeUnit(86400);
+      refreshLifetimeUI();
+      return;
+    }
+    let unit = 60;
+    if (seconds % 86400 === 0) unit = 86400;
+    else if (seconds % 3600 === 0) unit = 3600;
+    valEl.value = String(Math.round(seconds / unit));
+    setLifetimeUnit(unit);
+    refreshLifetimeUI();
+  }
+
+  // readLifetimeInputs returns the configured lifetime in seconds (0 = permanent).
+  function readLifetimeInputs() {
+    const valEl = $('apiKeyForm_lifetimeValue');
+    if (!valEl) return 0;
+    const val = parseInt(valEl.value, 10);
+    if (isNaN(val) || val < 0) return 0;
+    return val * lifetimeUnitSeconds();
+  }
+
+  // refreshLifetimeUI keeps the chips highlighted, and the summary line in sync
+  // with the current number + unit. Called on every relevant input event.
+  function refreshLifetimeUI() {
+    const seconds = readLifetimeInputs();
+    // Highlight the preset chip that exactly matches the current seconds.
+    qsa('#apiKeyForm_lifetimePresets .lifetime-chip').forEach(chip => {
+      const presetSecs = parseInt(chip.dataset.lifetimePreset, 10) || 0;
+      chip.classList.toggle('is-active', presetSecs === seconds);
+    });
+    const summary = $('apiKeyForm_lifetimeSummary');
+    if (summary) {
+      if (seconds <= 0) {
+        summary.textContent = t('apiKeys.lifetimeSummaryNever');
+      } else {
+        summary.textContent = t('apiKeys.lifetimeSummary', formatDurationShort(seconds));
+      }
+    }
   }
 
   function openApiKeyModal(entry) {
@@ -1706,6 +1824,7 @@
       keyEl.readOnly = false;
     }
     $('apiKeyForm_enabled').checked = entry ? !!entry.enabled : true;
+    setLifetimeInputs(entry ? (entry.lifetimeSeconds || 0) : 0);
     $('apiKeyForm_tokenLimit').value = entry ? String(entry.tokenLimit || 0) : '0';
     $('apiKeyForm_creditLimit').value = entry ? String(entry.creditLimit || 0) : '0';
     apiKeyModalSubmitting = false;
@@ -1730,9 +1849,11 @@
       const enabled = $('apiKeyForm_enabled').checked;
       const tokenLimit = parseInt($('apiKeyForm_tokenLimit').value, 10);
       const creditLimit = parseFloat($('apiKeyForm_creditLimit').value);
+      const lifetimeSeconds = readLifetimeInputs();
       const payload = {
         name: name,
         enabled: enabled,
+        lifetimeSeconds: lifetimeSeconds,
         tokenLimit: isNaN(tokenLimit) || tokenLimit < 0 ? 0 : tokenLimit,
         creditLimit: isNaN(creditLimit) || creditLimit < 0 ? 0 : creditLimit
       };
@@ -1811,6 +1932,122 @@
     }
   }
 
+  async function restartApiKeyEntry(id, name) {
+    const ok = await confirmAction(t('apiKeys.confirmRestart', name || t('apiKeys.unnamed')), {
+      title: t('apiKeys.actionRestart'),
+      confirmText: t('apiKeys.actionRestart')
+    });
+    if (!ok) return;
+    try {
+      const res = await api('/api-keys/' + encodeURIComponent(id) + '/restart', { method: 'POST' });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || d.success === false) throw new Error(d.error || t('common.failed'));
+      toast(t('apiKeys.restartSuccess'), 'success');
+      await loadApiKeys();
+    } catch (e) {
+      toast((e && e.message) || t('common.failed'), 'error');
+    }
+  }
+
+  // --- Extend lifetime modal -------------------------------------------------
+  // Mirrors the create/edit lifetime control (chips + number + unit segmented),
+  // replacing the old window.prompt(). The target key id is held while open.
+  let apiKeyExtendingId = '';
+  let apiKeyExtendSubmitting = false;
+
+  function extendUnitSeconds() {
+    const active = document.querySelector('#apiKeyExtend_unit .segmented-item.is-active');
+    return active ? (parseInt(active.dataset.unit, 10) || 60) : 86400;
+  }
+  function setExtendUnit(unitSeconds) {
+    const items = qsa('#apiKeyExtend_unit .segmented-item');
+    let matched = false;
+    items.forEach(it => {
+      const on = parseInt(it.dataset.unit, 10) === unitSeconds;
+      it.classList.toggle('is-active', on);
+      if (on) matched = true;
+    });
+    if (!matched && items.length) {
+      items.forEach(it => it.classList.remove('is-active'));
+      items[items.length - 1].classList.add('is-active');
+    }
+  }
+  function readExtendInputs() {
+    const valEl = $('apiKeyExtend_value');
+    if (!valEl) return 0;
+    const val = parseInt(valEl.value, 10);
+    if (isNaN(val) || val <= 0) return 0;
+    return val * extendUnitSeconds();
+  }
+  function refreshExtendUI() {
+    const seconds = readExtendInputs();
+    qsa('#apiKeyExtend_presets .lifetime-chip').forEach(chip => {
+      const presetSecs = parseInt(chip.dataset.extendPreset, 10) || 0;
+      chip.classList.toggle('is-active', presetSecs === seconds);
+    });
+    const summary = $('apiKeyExtend_summary');
+    if (summary) {
+      summary.textContent = seconds > 0
+        ? t('apiKeys.extendSummary', formatDurationShort(seconds))
+        : '';
+    }
+  }
+
+  function extendApiKeyEntry(id) {
+    apiKeyExtendingId = id;
+    apiKeyExtendSubmitting = false;
+    const entry = apiKeysCache.find(x => x.id === id);
+    const titleEl = $('apiKeyExtendTitle');
+    if (titleEl) titleEl.textContent = t('apiKeys.extendTitleFor', entry && entry.name ? entry.name : t('apiKeys.unnamed'));
+    $('apiKeyExtend_value').value = '1';
+    setExtendUnit(86400);
+    $('apiKeyExtendConfirmBtn').disabled = false;
+    refreshExtendUI();
+    openDialog('apiKeyExtendModal');
+  }
+  function closeExtendModal() {
+    closeDialog('apiKeyExtendModal');
+    apiKeyExtendingId = '';
+    apiKeyExtendSubmitting = false;
+  }
+  async function submitExtendModal() {
+    if (apiKeyExtendSubmitting || !apiKeyExtendingId) return;
+    const seconds = readExtendInputs();
+    if (seconds <= 0) {
+      toast(t('apiKeys.extendInvalid'), 'error');
+      return;
+    }
+    apiKeyExtendSubmitting = true;
+    const btn = $('apiKeyExtendConfirmBtn');
+    if (btn) btn.disabled = true;
+    const id = apiKeyExtendingId;
+    try {
+      const res = await api('/api-keys/' + encodeURIComponent(id) + '/extend', { method: 'POST', body: JSON.stringify({ seconds: seconds }) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || d.success === false) throw new Error(d.error || t('common.failed'));
+      toast(t('apiKeys.extendSuccess', formatDurationShort(seconds)), 'success');
+      closeExtendModal();
+      await loadApiKeys();
+    } catch (e) {
+      toast((e && e.message) || t('common.failed'), 'error');
+      apiKeyExtendSubmitting = false;
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  // formatDurationShort renders a second count as a compact "Xd Yh Zm" label.
+  function formatDurationShort(seconds) {
+    let s = Math.max(0, Math.floor(seconds));
+    const d = Math.floor(s / 86400); s -= d * 86400;
+    const h = Math.floor(s / 3600); s -= h * 3600;
+    const m = Math.floor(s / 60);
+    const parts = [];
+    if (d > 0) parts.push(d + 'd');
+    if (h > 0) parts.push(h + 'h');
+    if (m > 0) parts.push(m + 'm');
+    return parts.length ? parts.join(' ') : (seconds + 's');
+  }
+
   function showNewApiKey(plaintext) {
     $('apiKeyShowValue').value = plaintext || '';
     openDialog('apiKeyShowModal');
@@ -1836,6 +2073,42 @@
     }
   }
 
+  // bindExtendModalEvents wires the extend modal's chips, unit toggle, number
+  // field, and footer buttons once at startup.
+  function bindExtendModalEvents() {
+    const modal = $('apiKeyExtendModal');
+    if (modal) {
+      modal.addEventListener('click', e => {
+        const chip = e.target.closest('[data-extend-preset]');
+        if (chip) {
+          e.preventDefault();
+          const seconds = parseInt(chip.dataset.extendPreset, 10) || 0;
+          let unit = 60;
+          if (seconds % 86400 === 0) unit = 86400;
+          else if (seconds % 3600 === 0) unit = 3600;
+          $('apiKeyExtend_value').value = String(Math.round(seconds / unit));
+          setExtendUnit(unit);
+          refreshExtendUI();
+          return;
+        }
+        const unitBtn = e.target.closest('#apiKeyExtend_unit .segmented-item');
+        if (unitBtn) {
+          e.preventDefault();
+          setExtendUnit(parseInt(unitBtn.dataset.unit, 10) || 60);
+          refreshExtendUI();
+        }
+      });
+      const valEl = $('apiKeyExtend_value');
+      if (valEl) valEl.addEventListener('input', refreshExtendUI);
+    }
+    const confirmBtn = $('apiKeyExtendConfirmBtn');
+    if (confirmBtn) confirmBtn.addEventListener('click', submitExtendModal);
+    const cancelBtn = $('apiKeyExtendCancelBtn');
+    if (cancelBtn) cancelBtn.addEventListener('click', closeExtendModal);
+    const closeX = $('apiKeyExtendClose');
+    if (closeX) closeX.addEventListener('click', closeExtendModal);
+  }
+
   function bindApiKeyEvents() {
     const list = $('apiKeysList');
     if (list) {
@@ -1850,6 +2123,8 @@
         if (action === 'edit') openApiKeyModal(entry);
         else if (action === 'delete') deleteApiKeyEntry(id, name);
         else if (action === 'reset') resetApiKeyUsageEntry(id, name);
+        else if (action === 'restart') restartApiKeyEntry(id, name);
+        else if (action === 'extend') extendApiKeyEntry(id);
       });
       list.addEventListener('change', e => {
         const cb = e.target.closest('input[data-apikey-action="toggle"]');
@@ -1879,8 +2154,56 @@
     if (showCloseX) showCloseX.addEventListener('click', closeShowApiKeyModal);
     const copyBtn = $('apiKeyShowCopyBtn');
     if (copyBtn) copyBtn.addEventListener('click', copyNewApiKey);
+    // Lifetime controls inside the create/edit modal. Preset chips fill the
+    // value+unit from a duration in seconds; the segmented unit toggle switches
+    // the multiplier; the number field and chips/summary stay in sync.
+    const modal = $('apiKeyModal');
+    if (modal) {
+      modal.addEventListener('click', e => {
+        const chip = e.target.closest('[data-lifetime-preset]');
+        if (chip) {
+          e.preventDefault();
+          setLifetimeInputs(parseInt(chip.dataset.lifetimePreset, 10) || 0);
+          return;
+        }
+        const unit = e.target.closest('#apiKeyForm_lifetimeUnit .segmented-item');
+        if (unit) {
+          e.preventDefault();
+          setLifetimeUnit(parseInt(unit.dataset.unit, 10) || 60);
+          refreshLifetimeUI();
+        }
+      });
+      const valEl = $('apiKeyForm_lifetimeValue');
+      if (valEl) valEl.addEventListener('input', refreshLifetimeUI);
+    }
+    bindExtendModalEvents();
     bindDialogBackdropClose('apiKeyModal', closeApiKeyModal);
     bindDialogBackdropClose('apiKeyShowModal', closeShowApiKeyModal);
+    bindDialogBackdropClose('apiKeyExtendModal', closeExtendModal);
+    startApiKeyCountdownTicker();
+  }
+
+  // startApiKeyCountdownTicker refreshes the per-key "time remaining" spans every
+  // second in place (without a full re-render), so the countdown looks live. When
+  // a deadline passes it triggers a reload so the auto-disable shows up promptly.
+  let apiKeyCountdownTicker = null;
+  function startApiKeyCountdownTicker() {
+    if (apiKeyCountdownTicker) return;
+    apiKeyCountdownTicker = setInterval(() => {
+      const spans = document.querySelectorAll('[data-apikey-expires]');
+      if (!spans.length) return;
+      let expiredNow = false;
+      spans.forEach(span => {
+        const expiresAt = parseInt(span.dataset.apikeyExpires, 10) || 0;
+        if (expiresAt <= 0) return;
+        const txt = formatRemaining(expiresAt);
+        span.textContent = txt;
+        if (expiresAt - Math.floor(Date.now() / 1000) <= 0) expiredNow = true;
+      });
+      // A key just hit its deadline; reload once so the backend's auto-disable and
+      // the stopped-clock state are reflected.
+      if (expiredNow && isSettingsTabVisible()) loadApiKeys();
+    }, 1000);
   }
 
   // Prompt filter rules
