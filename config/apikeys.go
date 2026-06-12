@@ -59,6 +59,13 @@ func AddApiKey(entry ApiKeyEntry) (ApiKeyEntry, error) {
 	if entry.CreatedAt == 0 {
 		entry.CreatedAt = time.Now().Unix()
 	}
+	// Arm the lifetime clock when created enabled with a TTL; otherwise the clock
+	// stays stopped (ExpiresAt = 0) until the key is enabled.
+	if entry.Enabled && entry.LifetimeSeconds > 0 {
+		entry.ExpiresAt = time.Now().Unix() + entry.LifetimeSeconds
+	} else {
+		entry.ExpiresAt = 0
+	}
 	cfg.ApiKeys = append(cfg.ApiKeys, entry)
 	if err := saveLocked(); err != nil {
 		// Roll back the in-memory append so we don't leave inconsistent state.
@@ -103,13 +110,140 @@ func UpdateApiKey(id string, patch ApiKeyEntry) error {
 		}
 		cfg.ApiKeys[idx].Key = newKey
 	}
+	wasEnabled := cfg.ApiKeys[idx].Enabled
+	oldLifetime := cfg.ApiKeys[idx].LifetimeSeconds
+
 	cfg.ApiKeys[idx].Enabled = patch.Enabled
 	cfg.ApiKeys[idx].TokenLimit = patch.TokenLimit
 	cfg.ApiKeys[idx].CreditLimit = patch.CreditLimit
+	cfg.ApiKeys[idx].LifetimeSeconds = patch.LifetimeSeconds
 	if patch.Migrated {
 		cfg.ApiKeys[idx].Migrated = true
 	}
+
+	// Lifetime clock transitions:
+	//   - disabled (manual or staying off) -> stop the clock and reset to 0.
+	//   - disabled->enabled                -> arm a fresh full TTL from now.
+	//   - staying enabled, TTL changed     -> re-arm from now with the new TTL.
+	//   - staying enabled, TTL unchanged   -> leave the running deadline as-is.
+	now := time.Now().Unix()
+	switch {
+	case !cfg.ApiKeys[idx].Enabled:
+		cfg.ApiKeys[idx].ExpiresAt = 0
+	case !wasEnabled || cfg.ApiKeys[idx].LifetimeSeconds != oldLifetime:
+		if cfg.ApiKeys[idx].LifetimeSeconds > 0 {
+			cfg.ApiKeys[idx].ExpiresAt = now + cfg.ApiKeys[idx].LifetimeSeconds
+		} else {
+			cfg.ApiKeys[idx].ExpiresAt = 0
+		}
+	}
+
 	return saveLocked()
+}
+
+// RestartApiKeyLifetime re-enables the key (if needed) and arms a fresh full TTL
+// counting from now. Used by the "restart" admin action. If the key has no
+// LifetimeSeconds configured, it is simply enabled with the clock stopped.
+func RestartApiKeyLifetime(id string) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if cfg == nil {
+		return errors.New("config not initialized")
+	}
+	for i := range cfg.ApiKeys {
+		if cfg.ApiKeys[i].ID == id {
+			cfg.ApiKeys[i].Enabled = true
+			if cfg.ApiKeys[i].LifetimeSeconds > 0 {
+				cfg.ApiKeys[i].ExpiresAt = time.Now().Unix() + cfg.ApiKeys[i].LifetimeSeconds
+			} else {
+				cfg.ApiKeys[i].ExpiresAt = 0
+			}
+			return saveLocked()
+		}
+	}
+	return errors.New("api key not found")
+}
+
+// ExtendApiKeyLifetime pushes the deadline out by the given number of days.
+// Thin wrapper over ExtendApiKeyLifetimeSeconds kept for callers that work in days.
+func ExtendApiKeyLifetime(id string, days int64) error {
+	return ExtendApiKeyLifetimeSeconds(id, days*86400)
+}
+
+// ExtendApiKeyLifetimeSeconds pushes the running deadline out by the given number
+// of seconds. When the clock is currently stopped (ExpiresAt == 0), the extension
+// is counted from now so the key gets a live deadline. The configured
+// LifetimeSeconds is left unchanged — this only moves the running deadline.
+// Rejects non-positive durations.
+func ExtendApiKeyLifetimeSeconds(id string, seconds int64) error {
+	if seconds <= 0 {
+		return errors.New("duration must be positive")
+	}
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if cfg == nil {
+		return errors.New("config not initialized")
+	}
+	for i := range cfg.ApiKeys {
+		if cfg.ApiKeys[i].ID == id {
+			base := cfg.ApiKeys[i].ExpiresAt
+			if base == 0 {
+				base = time.Now().Unix()
+			}
+			cfg.ApiKeys[i].ExpiresAt = base + seconds
+			return saveLocked()
+		}
+	}
+	return errors.New("api key not found")
+}
+
+// SetApiKeyExpiresAt overwrites the running deadline (Unix seconds) for the entry
+// without touching LifetimeSeconds or Enabled. A value of 0 stops the clock.
+// Primarily used to seed deterministic deadlines in tests.
+func SetApiKeyExpiresAt(id string, expiresAt int64) error {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if cfg == nil {
+		return errors.New("config not initialized")
+	}
+	for i := range cfg.ApiKeys {
+		if cfg.ApiKeys[i].ID == id {
+			cfg.ApiKeys[i].ExpiresAt = expiresAt
+			return saveLocked()
+		}
+	}
+	return errors.New("api key not found")
+}
+
+// DisableExpiredApiKeys scans for enabled keys whose deadline has passed, disables
+// them, stops their clock (ExpiresAt = 0), and persists once if anything changed.
+// Returns the IDs that were disabled so the caller can log them. Auth already
+// rejects expired keys synchronously; this loop flips the persisted flag so the
+// admin UI reflects reality and the change survives restarts.
+func DisableExpiredApiKeys() []string {
+	cfgLock.Lock()
+	defer cfgLock.Unlock()
+	if cfg == nil {
+		return nil
+	}
+	now := time.Now().Unix()
+	var disabled []string
+	for i := range cfg.ApiKeys {
+		e := &cfg.ApiKeys[i]
+		if e.Enabled && e.ExpiresAt > 0 && now >= e.ExpiresAt {
+			e.Enabled = false
+			e.ExpiresAt = 0
+			disabled = append(disabled, e.ID)
+		}
+	}
+	if len(disabled) > 0 {
+		if err := saveLocked(); err != nil {
+			// Persist failed; the in-memory flip stands but won't survive restart.
+			// Caller logs the IDs regardless.
+			return disabled
+		}
+	}
+	return disabled
 }
 
 // DeleteApiKey removes the API key entry with the given ID. Returns nil even if

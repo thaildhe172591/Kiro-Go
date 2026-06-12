@@ -137,6 +137,14 @@ type ApiKeyEntry struct {
 	CreatedAt  int64  `json:"createdAt"`          // Creation timestamp (Unix seconds)
 	LastUsedAt int64  `json:"lastUsedAt,omitempty"`
 
+	// Lifetime / TTL. LifetimeSeconds is the configured time-to-live (0 = never expires,
+	// e.g. 86400 = 1 day). ExpiresAt is the absolute deadline (Unix seconds) while the
+	// clock is running; 0 means the clock is stopped (key disabled or no lifetime set).
+	// When the key is enabled, ExpiresAt = enableTime + LifetimeSeconds. Disabling
+	// manually clears ExpiresAt back to 0 so the countdown resets from scratch on re-enable.
+	LifetimeSeconds int64 `json:"lifetimeSeconds,omitempty"`
+	ExpiresAt       int64 `json:"expiresAt,omitempty"`
+
 	// Limits (0 = unlimited)
 	TokenLimit  int64   `json:"tokenLimit,omitempty"`
 	CreditLimit float64 `json:"creditLimit,omitempty"`

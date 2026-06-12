@@ -607,6 +607,27 @@
           </label>
         </div>
         <div class="form-group">
+          <label data-i18n="apiKeys.formLifetime"></label>
+          <div class="lifetime-presets" id="apiKeyForm_lifetimePresets">
+            <button class="lifetime-chip" type="button" data-lifetime-preset="0" data-i18n="apiKeys.lifetimeNever"></button>
+            <button class="lifetime-chip" type="button" data-lifetime-preset="120" data-i18n="apiKeys.lifetime2m"></button>
+            <button class="lifetime-chip" type="button" data-lifetime-preset="3600" data-i18n="apiKeys.lifetime1h"></button>
+            <button class="lifetime-chip" type="button" data-lifetime-preset="86400" data-i18n="apiKeys.lifetime1d"></button>
+            <button class="lifetime-chip" type="button" data-lifetime-preset="604800" data-i18n="apiKeys.lifetime7d"></button>
+            <button class="lifetime-chip" type="button" data-lifetime-preset="2592000" data-i18n="apiKeys.lifetime30d"></button>
+          </div>
+          <div class="lifetime-row">
+            <input type="number" id="apiKeyForm_lifetimeValue" class="lifetime-value" min="0" step="1" value="0" />
+            <div class="segmented" id="apiKeyForm_lifetimeUnit" role="group">
+              <button class="segmented-item" type="button" data-unit="60" data-i18n="apiKeys.unitMinutes"></button>
+              <button class="segmented-item" type="button" data-unit="3600" data-i18n="apiKeys.unitHours"></button>
+              <button class="segmented-item is-active" type="button" data-unit="86400" data-i18n="apiKeys.unitDays"></button>
+            </div>
+          </div>
+          <div class="lifetime-summary" id="apiKeyForm_lifetimeSummary"></div>
+          <small data-i18n="apiKeys.lifetimeHint"></small>
+        </div>
+        <div class="form-group">
           <label data-i18n="apiKeys.limitTokens"></label>
           <input type="number" id="apiKeyForm_tokenLimit" min="0" step="1" value="0" />
           <small data-i18n="apiKeys.limitHint"></small>
@@ -639,6 +660,42 @@
         <div class="modal-footer">
           <button class="btn btn-outline" id="apiKeyShowCopyBtn" type="button" data-i18n="apiKeys.copyBtn"></button>
           <button class="btn btn-primary" id="apiKeyShowCloseBtn" type="button" data-i18n="apiKeys.closeBtn"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="apiKeyExtendModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span class="modal-title" id="apiKeyExtendTitle" data-i18n="apiKeys.extendTitle"></span>
+        <button class="modal-close" id="apiKeyExtendClose" type="button" aria-label=""
+          data-i18n-aria-label="common.close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label data-i18n="apiKeys.extendAmount"></label>
+          <div class="lifetime-presets" id="apiKeyExtend_presets">
+            <button class="lifetime-chip" type="button" data-extend-preset="120" data-i18n="apiKeys.lifetime2m"></button>
+            <button class="lifetime-chip" type="button" data-extend-preset="3600" data-i18n="apiKeys.lifetime1h"></button>
+            <button class="lifetime-chip" type="button" data-extend-preset="86400" data-i18n="apiKeys.lifetime1d"></button>
+            <button class="lifetime-chip" type="button" data-extend-preset="604800" data-i18n="apiKeys.lifetime7d"></button>
+            <button class="lifetime-chip" type="button" data-extend-preset="2592000" data-i18n="apiKeys.lifetime30d"></button>
+          </div>
+          <div class="lifetime-row">
+            <input type="number" id="apiKeyExtend_value" class="lifetime-value" min="1" step="1" value="1" />
+            <div class="segmented" id="apiKeyExtend_unit" role="group">
+              <button class="segmented-item" type="button" data-unit="60" data-i18n="apiKeys.unitMinutes"></button>
+              <button class="segmented-item" type="button" data-unit="3600" data-i18n="apiKeys.unitHours"></button>
+              <button class="segmented-item is-active" type="button" data-unit="86400" data-i18n="apiKeys.unitDays"></button>
+            </div>
+          </div>
+          <div class="lifetime-summary" id="apiKeyExtend_summary"></div>
+          <small data-i18n="apiKeys.extendHint"></small>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="apiKeyExtendCancelBtn" type="button" data-i18n="apiKeys.cancelBtn"></button>
+          <button class="btn btn-primary" id="apiKeyExtendConfirmBtn" type="button" data-i18n="apiKeys.actionExtend"></button>
         </div>
       </div>
     </div>
