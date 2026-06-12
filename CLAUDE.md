@@ -87,11 +87,19 @@ Per-account `AuthRegion` and `ApiRegion` (with global fallback) decouple where t
 
 ### Admin UI
 
-`/admin` serves [web/index.html](web/index.html); admin JSON APIs live under `/admin/api/...` and are routed by a second `switch` in `proxy/handler.go` near line 2064. The big, mostly-unused [web/index-legacy.html](web/index-legacy.html) (170 KB) is kept for fallback — don't edit it unless explicitly working on the legacy UI. Localization is JSON-based: `web/locales/en.json` and `web/locales/zh.json`.
+`/admin` serves [web/index.html](web/index.html); admin JSON APIs live under `/admin/api/...` and are routed by a second `switch` in `handleAdminAPI` ([proxy/handler.go:2048](proxy/handler.go#L2048)). The big, mostly-unused [web/index-legacy.html](web/index-legacy.html) (170 KB) is kept for fallback — don't edit it unless explicitly working on the legacy UI. Localization is JSON-based: `web/locales/en.json` and `web/locales/zh.json`.
 
 ### Thinking mode
 
 Triggered by either appending the configured suffix (default `-thinking`) to the model name, or by sending a top-level `thinking: {type, budget_tokens}` block on Claude requests. The response format is configurable per-API (`OpenAIThinkingFormat`, `ClaudeThinkingFormat`): `reasoning_content`, `thinking`, or `think`. The translator dual-tracks reasoning sources (`thinkingStreamSource`) to avoid mixing tag-block and event-based reasoning streams from the upstream.
+
+### Prompt cache emulation ([proxy/cache_tracker.go](proxy/cache_tracker.go))
+
+The Kiro upstream doesn't report Anthropic-style `cache_read`/`cache_creation` token counts, so `promptCacheTracker` synthesizes them. It hashes cacheable prefixes (system + message breakpoints), stores them with a 5-minute TTL (`defaultPromptCacheTTL`), and reports cache hits on subsequent requests that share a prefix. Breakpoints below `defaultMinCacheableTokens` (1024, per Anthropic's minimum) are excluded so short requests don't report unrealistic 100% hit rates. Per-model minimums come from `minCacheableTokensForModel`.
+
+### Token estimation ([proxy/token_estimator.go](proxy/token_estimator.go))
+
+Because the upstream usage numbers are unreliable for some endpoints, `estimateApproxTokens` and the `estimateClaude*` helpers compute approximate input/output token counts (including thinking content and tool-use blocks) used for usage attribution and the cache tracker. These are heuristics, not a real tokenizer — don't treat them as exact.
 
 ## Conventions to Follow
 
