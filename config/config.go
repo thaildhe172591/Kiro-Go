@@ -137,9 +137,24 @@ type ApiKeyEntry struct {
 	CreatedAt  int64  `json:"createdAt"`          // Creation timestamp (Unix seconds)
 	LastUsedAt int64  `json:"lastUsedAt,omitempty"`
 
+	// Lifetime / TTL. LifetimeSeconds is the configured time-to-live (0 = never expires,
+	// e.g. 86400 = 1 day). ExpiresAt is the absolute deadline (Unix seconds) while the
+	// clock is running; 0 means the clock is stopped (key disabled or no lifetime set).
+	// When the key is enabled, ExpiresAt = enableTime + LifetimeSeconds. Disabling
+	// manually clears ExpiresAt back to 0 so the countdown resets from scratch on re-enable.
+	LifetimeSeconds int64 `json:"lifetimeSeconds,omitempty"`
+	ExpiresAt       int64 `json:"expiresAt,omitempty"`
+
 	// Limits (0 = unlimited)
 	TokenLimit  int64   `json:"tokenLimit,omitempty"`
 	CreditLimit float64 `json:"creditLimit,omitempty"`
+
+	// Rate limits (0 = unlimited). Enforced in-memory by the proxy's rate limiter;
+	// the per-minute window is a rolling clock minute and the per-day window resets
+	// at local midnight. These caps gate request frequency to keep the upstream
+	// healthy; the counters behind them live in RAM and are never persisted.
+	RequestsPerMinute int64 `json:"requestsPerMinute,omitempty"`
+	RequestsPerDay    int64 `json:"requestsPerDay,omitempty"`
 
 	// Cumulative usage (never auto-reset)
 	TokensUsed    int64   `json:"tokensUsed,omitempty"`
@@ -185,9 +200,9 @@ type Config struct {
 	ProxyURL string `json:"proxyURL,omitempty"`
 
 	// Global region configuration (fallback for all accounts)
-	Region       string `json:"region,omitempty"`       // Default region for both auth and API; defaults to us-east-1
-	AuthRegion   string `json:"authRegion,omitempty"`   // Default region for token refresh endpoints
-	ApiRegion    string `json:"apiRegion,omitempty"`    // Default region for API request hosts
+	Region     string `json:"region,omitempty"`     // Default region for both auth and API; defaults to us-east-1
+	AuthRegion string `json:"authRegion,omitempty"` // Default region for token refresh endpoints
+	ApiRegion  string `json:"apiRegion,omitempty"`  // Default region for API request hosts
 
 	// SanitizeClaudeCodePrompt is kept for backward-compatible JSON loading only.
 	// Migrated to FilterClaudeCode on first load. Do not use directly.
@@ -994,4 +1009,3 @@ func (a *Account) EffectiveApiRegion() string {
 	}
 	return "us-east-1"
 }
-
