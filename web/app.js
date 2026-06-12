@@ -1581,6 +1581,42 @@
     }
   }
 
+  // Auto-refresh countdown for the API keys list. Ticks every second while the
+  // Settings tab is visible; on reaching zero it reloads the list and restarts
+  // the countdown. Hidden (and paused) on every other tab / the login screen.
+  const apiKeysRefreshInterval = 60;
+  let apiKeysCountdown = apiKeysRefreshInterval;
+
+  function isSettingsTabVisible() {
+    if ($('mainPage').classList.contains('hidden')) return false;
+    const settingsTab = $('tabSettings');
+    return !!settingsTab && !settingsTab.classList.contains('hidden');
+  }
+
+  function renderApiKeysCountdown() {
+    const el = $('apiKeysCountdown');
+    if (!el) return;
+    el.textContent = isSettingsTabVisible() ? t('apiKeys.autoRefreshIn', apiKeysCountdown) : '';
+  }
+
+  function resetApiKeysCountdown() {
+    apiKeysCountdown = apiKeysRefreshInterval;
+    renderApiKeysCountdown();
+  }
+
+  function startApiKeysAutoRefresh() {
+    resetApiKeysCountdown();
+    setInterval(() => {
+      if (!isSettingsTabVisible()) return;
+      apiKeysCountdown--;
+      if (apiKeysCountdown <= 0) {
+        apiKeysCountdown = apiKeysRefreshInterval;
+        loadApiKeys();
+      }
+      renderApiKeysCountdown();
+    }, 1000);
+  }
+
   function formatNumber(n) {
     if (n == null || isNaN(n)) return '0';
     if (Math.abs(n) >= 1 && Math.floor(n) === n) return Number(n).toLocaleString('en-US');
@@ -1827,6 +1863,7 @@
     if (refreshBtn) refreshBtn.addEventListener('click', async () => {
       refreshBtn.disabled = true;
       try { await loadApiKeys(); } finally { refreshBtn.disabled = false; }
+      resetApiKeysCountdown();
     });
     const addBtn = $('addApiKeyBtn');
     if (addBtn) addBtn.addEventListener('click', () => openApiKeyModal(null));
@@ -2628,6 +2665,9 @@
     qsa('.tab').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
     qsa('.tab-content').forEach(c => c.classList.add('hidden'));
     $('tab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.remove('hidden');
+    // Restart the API-keys countdown when entering Settings so it always begins
+    // at a full interval; clear the label when leaving.
+    if (typeof resetApiKeysCountdown === 'function') resetApiKeysCountdown();
   }
 
   // Event wiring
@@ -2845,14 +2885,10 @@
     setInterval(() => {
       if (!$('mainPage').classList.contains('hidden')) loadStats();
     }, 10000);
-    // Per-key usage counters are not part of loadStats(); refresh them on their own
-    // 60s cadence, but only while the Settings tab is actually visible to avoid
-    // needless admin API calls.
-    setInterval(() => {
-      if ($('mainPage').classList.contains('hidden')) return;
-      const settingsTab = $('tabSettings');
-      if (settingsTab && !settingsTab.classList.contains('hidden')) loadApiKeys();
-    }, 60000);
+    // Per-key usage counters are not part of loadStats(); refresh them on their
+    // own 60s cadence with a visible countdown, but only while the Settings tab
+    // is actually visible — to avoid needless admin API calls.
+    startApiKeysAutoRefresh();
   }
 
   if (document.readyState === 'loading') {
