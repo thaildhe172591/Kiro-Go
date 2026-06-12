@@ -1823,6 +1823,11 @@
         toggleApiKeyEntry(id, cb.checked);
       });
     }
+    const refreshBtn = $('refreshApiKeysBtn');
+    if (refreshBtn) refreshBtn.addEventListener('click', async () => {
+      refreshBtn.disabled = true;
+      try { await loadApiKeys(); } finally { refreshBtn.disabled = false; }
+    });
     const addBtn = $('addApiKeyBtn');
     if (addBtn) addBtn.addEventListener('click', () => openApiKeyModal(null));
     const saveBtn = $('apiKeyModalSaveBtn');
@@ -2840,6 +2845,14 @@
     setInterval(() => {
       if (!$('mainPage').classList.contains('hidden')) loadStats();
     }, 10000);
+    // Per-key usage counters are not part of loadStats(); refresh them on their own
+    // 60s cadence, but only while the Settings tab is actually visible to avoid
+    // needless admin API calls.
+    setInterval(() => {
+      if ($('mainPage').classList.contains('hidden')) return;
+      const settingsTab = $('tabSettings');
+      if (settingsTab && !settingsTab.classList.contains('hidden')) loadApiKeys();
+    }, 60000);
   }
 
   if (document.readyState === 'loading') {
