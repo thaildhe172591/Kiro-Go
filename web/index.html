@@ -248,10 +248,16 @@
           <div class="form-group" style="margin-top: 1rem;">
             <div class="flex items-center gap-2" style="justify-content: space-between;">
               <label class="font-semibold" data-i18n="apiKeys.listTitle"></label>
-              <button class="btn btn-outline btn-sm" id="addApiKeyBtn" type="button">
-                <i class="fa-solid fa-plus"></i>
-                <span data-i18n="apiKeys.add"></span>
-              </button>
+              <div class="flex items-center gap-2">
+                <button class="btn btn-outline btn-sm" id="refreshApiKeysBtn" type="button">
+                  <i class="fa-solid fa-rotate"></i>
+                  <span data-i18n="apiKeys.refresh"></span>
+                </button>
+                <button class="btn btn-outline btn-sm" id="addApiKeyBtn" type="button">
+                  <i class="fa-solid fa-plus"></i>
+                  <span data-i18n="apiKeys.add"></span>
+                </button>
+              </div>
             </div>
             <small data-i18n="apiKeys.listHint"></small>
           </div>
