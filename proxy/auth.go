@@ -82,6 +82,12 @@ func (h *Handler) authenticate(r *http.Request) (*config.ApiKeyEntry, error) {
 			}
 			return nil, newAuthError(http.StatusTooManyRequests, "rate_limit_error", "credit limit exceeded")
 		}
+		// Per-key request rate limiting (in-memory, calendar-bucketed). Counts every
+		// authenticated request so spam is throttled before it reaches the upstream.
+		// h.apiKeyLimiter is nil in bare Handler{} test fixtures, which Allow tolerates.
+		if scope, ok := h.apiKeyLimiter.Allow(entry.ID, entry.RequestsPerMinute, entry.RequestsPerDay); !ok {
+			return nil, newAuthError(http.StatusTooManyRequests, "rate_limit_error", "rate limit exceeded ("+scope+")")
+		}
 		return entry, nil
 	}
 

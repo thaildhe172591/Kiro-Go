@@ -149,6 +149,13 @@ type ApiKeyEntry struct {
 	TokenLimit  int64   `json:"tokenLimit,omitempty"`
 	CreditLimit float64 `json:"creditLimit,omitempty"`
 
+	// Rate limits (0 = unlimited). Enforced in-memory by the proxy's rate limiter;
+	// the per-minute window is a rolling clock minute and the per-day window resets
+	// at local midnight. These caps gate request frequency to keep the upstream
+	// healthy; the counters behind them live in RAM and are never persisted.
+	RequestsPerMinute int64 `json:"requestsPerMinute,omitempty"`
+	RequestsPerDay    int64 `json:"requestsPerDay,omitempty"`
+
 	// Cumulative usage (never auto-reset)
 	TokensUsed    int64   `json:"tokensUsed,omitempty"`
 	CreditsUsed   float64 `json:"creditsUsed,omitempty"`
@@ -193,9 +200,9 @@ type Config struct {
 	ProxyURL string `json:"proxyURL,omitempty"`
 
 	// Global region configuration (fallback for all accounts)
-	Region       string `json:"region,omitempty"`       // Default region for both auth and API; defaults to us-east-1
-	AuthRegion   string `json:"authRegion,omitempty"`   // Default region for token refresh endpoints
-	ApiRegion    string `json:"apiRegion,omitempty"`    // Default region for API request hosts
+	Region     string `json:"region,omitempty"`     // Default region for both auth and API; defaults to us-east-1
+	AuthRegion string `json:"authRegion,omitempty"` // Default region for token refresh endpoints
+	ApiRegion  string `json:"apiRegion,omitempty"`  // Default region for API request hosts
 
 	// SanitizeClaudeCodePrompt is kept for backward-compatible JSON loading only.
 	// Migrated to FilterClaudeCode on first load. Do not use directly.
@@ -1002,4 +1009,3 @@ func (a *Account) EffectiveApiRegion() string {
 	}
 	return "us-east-1"
 }
-

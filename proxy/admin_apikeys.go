@@ -23,32 +23,50 @@ type apiKeyView struct {
 	TokensUsed      int64   `json:"tokensUsed"`
 	CreditsUsed     float64 `json:"creditsUsed"`
 	RequestsCount   int64   `json:"requestsCount"`
+
+	// Rate limits (0 = unlimited) and their live in-memory usage counters.
+	// RequestsThisMinute/RequestsToday are not persisted; they come from the
+	// rate limiter and reset on calendar boundaries.
+	RequestsPerMinute  int64 `json:"requestsPerMinute,omitempty"`
+	RequestsPerDay     int64 `json:"requestsPerDay,omitempty"`
+	RequestsThisMinute int64 `json:"requestsThisMinute"`
+	RequestsToday      int64 `json:"requestsToday"`
 }
 
 func toApiKeyView(e config.ApiKeyEntry) apiKeyView {
 	return apiKeyView{
-		ID:              e.ID,
-		Name:            e.Name,
-		KeyMasked:       config.MaskApiKey(e.Key),
-		Enabled:         e.Enabled,
-		Migrated:        e.Migrated,
-		CreatedAt:       e.CreatedAt,
-		LastUsedAt:      e.LastUsedAt,
-		LifetimeSeconds: e.LifetimeSeconds,
-		ExpiresAt:       e.ExpiresAt,
-		TokenLimit:      e.TokenLimit,
-		CreditLimit:     e.CreditLimit,
-		TokensUsed:      e.TokensUsed,
-		CreditsUsed:     e.CreditsUsed,
-		RequestsCount:   e.RequestsCount,
+		ID:                e.ID,
+		Name:              e.Name,
+		KeyMasked:         config.MaskApiKey(e.Key),
+		Enabled:           e.Enabled,
+		Migrated:          e.Migrated,
+		CreatedAt:         e.CreatedAt,
+		LastUsedAt:        e.LastUsedAt,
+		LifetimeSeconds:   e.LifetimeSeconds,
+		ExpiresAt:         e.ExpiresAt,
+		TokenLimit:        e.TokenLimit,
+		CreditLimit:       e.CreditLimit,
+		TokensUsed:        e.TokensUsed,
+		CreditsUsed:       e.CreditsUsed,
+		RequestsCount:     e.RequestsCount,
+		RequestsPerMinute: e.RequestsPerMinute,
+		RequestsPerDay:    e.RequestsPerDay,
 	}
+}
+
+// withLiveRateUsage fills the live (non-persisted) rate counters from the limiter.
+func (h *Handler) withLiveRateUsage(v apiKeyView) apiKeyView {
+	if h.apiKeyLimiter != nil {
+		v.RequestsThisMinute, v.RequestsToday = h.apiKeyLimiter.Snapshot(v.ID)
+	}
+	return v
 }
 
 func (h *Handler) apiListApiKeys(w http.ResponseWriter, r *http.Request) {
 	entries := config.ListApiKeys()
 	out := make([]apiKeyView, len(entries))
 	for i, e := range entries {
-		out[i] = toApiKeyView(e)
+		out[i] = h.withLiveRateUsage(toApiKeyView(e))
 	}
 	json.NewEncoder(w).Encode(map[string]interface{}{"apiKeys": out})
 }
@@ -60,16 +78,18 @@ func (h *Handler) apiGetApiKey(w http.ResponseWriter, r *http.Request, id string
 		json.NewEncoder(w).Encode(map[string]string{"error": "API key not found"})
 		return
 	}
-	json.NewEncoder(w).Encode(toApiKeyView(*entry))
+	json.NewEncoder(w).Encode(h.withLiveRateUsage(toApiKeyView(*entry)))
 }
 
 type apiKeyCreateRequest struct {
-	Name            string  `json:"name,omitempty"`
-	Key             string  `json:"key,omitempty"`
-	Enabled         *bool   `json:"enabled,omitempty"`
-	LifetimeSeconds int64   `json:"lifetimeSeconds,omitempty"`
-	TokenLimit      int64   `json:"tokenLimit,omitempty"`
-	CreditLimit     float64 `json:"creditLimit,omitempty"`
+	Name              string  `json:"name,omitempty"`
+	Key               string  `json:"key,omitempty"`
+	Enabled           *bool   `json:"enabled,omitempty"`
+	LifetimeSeconds   int64   `json:"lifetimeSeconds,omitempty"`
+	TokenLimit        int64   `json:"tokenLimit,omitempty"`
+	CreditLimit       float64 `json:"creditLimit,omitempty"`
+	RequestsPerMinute int64   `json:"requestsPerMinute,omitempty"`
+	RequestsPerDay    int64   `json:"requestsPerDay,omitempty"`
 }
 
 func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
@@ -96,12 +116,14 @@ func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entry, err := config.AddApiKey(config.ApiKeyEntry{
-		Name:            req.Name,
-		Key:             keyValue,
-		Enabled:         enabled,
-		LifetimeSeconds: lifetime,
-		TokenLimit:      req.TokenLimit,
-		CreditLimit:     req.CreditLimit,
+		Name:              req.Name,
+		Key:               keyValue,
+		Enabled:           enabled,
+		LifetimeSeconds:   lifetime,
+		TokenLimit:        req.TokenLimit,
+		CreditLimit:       req.CreditLimit,
+		RequestsPerMinute: req.RequestsPerMinute,
+		RequestsPerDay:    req.RequestsPerDay,
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
@@ -119,12 +141,14 @@ func (h *Handler) apiCreateApiKey(w http.ResponseWriter, r *http.Request) {
 }
 
 type apiKeyUpdateRequest struct {
-	Name            *string  `json:"name,omitempty"`
-	Key             *string  `json:"key,omitempty"`
-	Enabled         *bool    `json:"enabled,omitempty"`
-	TokenLimit      *int64   `json:"tokenLimit,omitempty"`
-	CreditLimit     *float64 `json:"creditLimit,omitempty"`
-	LifetimeSeconds *int64   `json:"lifetimeSeconds,omitempty"`
+	Name              *string  `json:"name,omitempty"`
+	Key               *string  `json:"key,omitempty"`
+	Enabled           *bool    `json:"enabled,omitempty"`
+	TokenLimit        *int64   `json:"tokenLimit,omitempty"`
+	CreditLimit       *float64 `json:"creditLimit,omitempty"`
+	LifetimeSeconds   *int64   `json:"lifetimeSeconds,omitempty"`
+	RequestsPerMinute *int64   `json:"requestsPerMinute,omitempty"`
+	RequestsPerDay    *int64   `json:"requestsPerDay,omitempty"`
 }
 
 func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id string) {
@@ -160,6 +184,12 @@ func (h *Handler) apiUpdateApiKey(w http.ResponseWriter, r *http.Request, id str
 	}
 	if req.LifetimeSeconds != nil {
 		patch.LifetimeSeconds = *req.LifetimeSeconds
+	}
+	if req.RequestsPerMinute != nil {
+		patch.RequestsPerMinute = *req.RequestsPerMinute
+	}
+	if req.RequestsPerDay != nil {
+		patch.RequestsPerDay = *req.RequestsPerDay
 	}
 
 	if err := config.UpdateApiKey(id, patch); err != nil {

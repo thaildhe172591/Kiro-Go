@@ -39,6 +39,7 @@ type Handler struct {
 	modelsCacheTime int64
 	promptCache     *promptCacheTracker
 	tokenRefreshMu  sync.Mutex
+	apiKeyLimiter   *apiKeyRateLimiter
 }
 
 type thinkingStreamSource int
@@ -227,6 +228,7 @@ func NewHandler() *Handler {
 		stopStatsSaver:   make(chan struct{}),
 		stopApiKeyExpiry: make(chan struct{}),
 		promptCache:      newPromptCacheTracker(defaultPromptCacheTTL),
+		apiKeyLimiter:    newAPIKeyRateLimiter(),
 	}
 	// 启动后台刷新
 	go h.backgroundRefresh()
@@ -1307,6 +1309,15 @@ func (h *Handler) backgroundApiKeyExpiry() {
 		case <-ticker.C:
 			if ids := config.DisableExpiredApiKeys(); len(ids) > 0 {
 				logger.Infof("[ApiKeyExpiry] auto-disabled %d expired API key(s): %v", len(ids), ids)
+			}
+			// Piggyback: drop rate-limit counters for keys that no longer exist so
+			// the in-memory map can't grow unbounded after keys are deleted.
+			if h.apiKeyLimiter != nil {
+				valid := make(map[string]struct{})
+				for _, e := range config.ListApiKeys() {
+					valid[e.ID] = struct{}{}
+				}
+				h.apiKeyLimiter.Retain(valid)
 			}
 		case <-h.stopApiKeyExpiry:
 			return
@@ -2961,8 +2972,8 @@ func (h *Handler) apiImportCredentials(w http.ResponseWriter, r *http.Request) {
 
 	// 创建账号
 	account := config.Account{
-		ID:         auth.GenerateAccountID(),
-		Email:      email,
+		ID:           auth.GenerateAccountID(),
+		Email:        email,
 		AccessToken:  accessToken,
 		RefreshToken: req.RefreshToken,
 		ClientID:     req.ClientID,

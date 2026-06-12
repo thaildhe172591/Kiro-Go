@@ -1700,6 +1700,12 @@
       const creditsLine = usageLine(t('apiKeys.credits'), item.creditsUsed || 0, item.creditLimit || 0);
       const requestsLine = '<div class="text-xs muted-text">' + escapeHtml(t('apiKeys.requests')) + ': ' + escapeHtml(formatNumber(item.requestsCount || 0)) + '</div>';
       const lifetimeLine = lifetimeLineHtml(item);
+      const rpmLine = (item.requestsPerMinute || 0) > 0
+        ? usageLine(t('apiKeys.rpm'), item.requestsThisMinute || 0, item.requestsPerMinute || 0)
+        : '';
+      const rpdLine = (item.requestsPerDay || 0) > 0
+        ? usageLine(t('apiKeys.rpd'), item.requestsToday || 0, item.requestsPerDay || 0)
+        : '';
       const lifetimeButtons = (item.lifetimeSeconds || item.expiresAt || !item.enabled)
         ? '<button class="btn btn-outline btn-sm" type="button" data-apikey-action="restart" data-id="' + id + '">' + escapeHtml(t('apiKeys.actionRestart')) + '</button>' +
           '<button class="btn btn-outline btn-sm" type="button" data-apikey-action="extend" data-id="' + id + '">' + escapeHtml(t('apiKeys.actionExtend')) + '</button>'
@@ -1727,6 +1733,8 @@
           tokensLine +
           creditsLine +
           requestsLine +
+          rpmLine +
+          rpdLine +
           lifetimeLine +
         '</div>' +
       '</div>';
@@ -1827,6 +1835,8 @@
     setLifetimeInputs(entry ? (entry.lifetimeSeconds || 0) : 0);
     $('apiKeyForm_tokenLimit').value = entry ? String(entry.tokenLimit || 0) : '0';
     $('apiKeyForm_creditLimit').value = entry ? String(entry.creditLimit || 0) : '0';
+    $('apiKeyForm_rpm').value = entry ? String(entry.requestsPerMinute || 0) : '0';
+    $('apiKeyForm_rpd').value = entry ? String(entry.requestsPerDay || 0) : '0';
     apiKeyModalSubmitting = false;
     $('apiKeyModalSaveBtn').disabled = false;
     openDialog('apiKeyModal');
@@ -1849,13 +1859,17 @@
       const enabled = $('apiKeyForm_enabled').checked;
       const tokenLimit = parseInt($('apiKeyForm_tokenLimit').value, 10);
       const creditLimit = parseFloat($('apiKeyForm_creditLimit').value);
+      const rpm = parseInt($('apiKeyForm_rpm').value, 10);
+      const rpd = parseInt($('apiKeyForm_rpd').value, 10);
       const lifetimeSeconds = readLifetimeInputs();
       const payload = {
         name: name,
         enabled: enabled,
         lifetimeSeconds: lifetimeSeconds,
         tokenLimit: isNaN(tokenLimit) || tokenLimit < 0 ? 0 : tokenLimit,
-        creditLimit: isNaN(creditLimit) || creditLimit < 0 ? 0 : creditLimit
+        creditLimit: isNaN(creditLimit) || creditLimit < 0 ? 0 : creditLimit,
+        requestsPerMinute: isNaN(rpm) || rpm < 0 ? 0 : rpm,
+        requestsPerDay: isNaN(rpd) || rpd < 0 ? 0 : rpd
       };
       let res, d;
       if (apiKeyEditingId) {
